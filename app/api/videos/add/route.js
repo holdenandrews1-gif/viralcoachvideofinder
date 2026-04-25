@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { extractVideoId, fetchVideoById } from '@/lib/youtube';
-import { summarizeBatch } from '@/lib/anthropic';
+import { fetchTranscript } from '@/lib/transcripts';
+import { summarizeFromTranscript } from '@/lib/anthropic';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 export async function POST(request) {
   let body;
@@ -19,12 +21,13 @@ export async function POST(request) {
     return NextResponse.json({ error: 'A YouTube URL is required.' }, { status: 400 });
   }
 
-  // Try to enrich with YouTube metadata when possible.
   const videoId = extractVideoId(urlInput);
   let canonicalUrl = urlInput;
   let title = titleInput;
   let description = '';
   let thumbnail = null;
+  let publishedAt = null;
+  let durationSeconds = null;
 
   if (videoId) {
     try {
@@ -34,9 +37,10 @@ export async function POST(request) {
         if (!title) title = meta.title;
         description = meta.description;
         thumbnail = meta.thumbnail;
+        publishedAt = meta.publishedAt;
+        durationSeconds = meta.durationSeconds;
       }
     } catch (e) {
-      // Non-fatal — manual add should still work without YT metadata.
       console.warn('YouTube metadata fetch failed:', e.message);
     }
   }
@@ -48,17 +52,27 @@ export async function POST(request) {
     );
   }
 
-  // Generate summary + tags. Best-effort: if it fails, save the row anyway.
+  // Try to grab the transcript so the summary is rich.
+  let transcript = null;
+  if (videoId) {
+    const t = await fetchTranscript(videoId);
+    transcript = t?.text || null;
+  }
+
+  // Generate summary + tags + key_points. Best-effort.
   let summary = '';
   let tags = [];
+  let key_points = [];
   try {
-    const [s] = await summarizeBatch([
-      { videoId: videoId || canonicalUrl, title, description },
-    ]);
-    if (s) {
-      summary = s.summary;
-      tags = s.tags;
-    }
+    const out = await summarizeFromTranscript({
+      videoId: videoId || canonicalUrl,
+      title,
+      transcript,
+      description,
+    });
+    summary = out.summary;
+    tags = out.tags;
+    key_points = out.key_points;
   } catch (e) {
     console.warn('Summary generation failed:', e.message);
   }
@@ -66,7 +80,17 @@ export async function POST(request) {
   const { data, error } = await supabase
     .from('videos')
     .upsert(
-      { title, url: canonicalUrl, summary, tags, thumbnail },
+      {
+        title,
+        url: canonicalUrl,
+        summary,
+        tags,
+        key_points,
+        thumbnail,
+        transcript,
+        published_at: publishedAt,
+        duration_seconds: durationSeconds,
+      },
       { onConflict: 'url' }
     )
     .select()

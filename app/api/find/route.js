@@ -20,7 +20,7 @@ export async function POST(request) {
 
   const { data: library, error } = await supabase
     .from('videos')
-    .select('id, title, url, summary, tags, thumbnail');
+    .select('id, title, url, summary, tags, key_points, thumbnail');
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
