@@ -32,9 +32,19 @@ export default function VideoCard({ video, reason, showKeyPoints = false }) {
         <div className="p-4 flex-1 min-w-0">
           <div className="flex items-start justify-between gap-2">
             <h3 className="font-semibold text-slate-900 line-clamp-2">{video.title}</h3>
-            {duration && (
-              <span className="text-xs text-slate-500 whitespace-nowrap mt-0.5">{duration}</span>
-            )}
+            <div className="flex items-center gap-1.5 mt-0.5 flex-shrink-0">
+              {video.has_transcript && (
+                <span
+                  className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5"
+                  title="Has cached transcript"
+                >
+                  📄
+                </span>
+              )}
+              {duration && (
+                <span className="text-xs text-slate-500 whitespace-nowrap">{duration}</span>
+              )}
+            </div>
           </div>
 
           {reason && (

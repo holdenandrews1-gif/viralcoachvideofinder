@@ -87,7 +87,7 @@ export default function ImportTab() {
     }
   }
 
-  async function enrichLoop({ force = false } = {}) {
+  async function enrichLoop({ force = false, mode = 'missing' } = {}) {
     setPhase('enriching');
     let processed = 0;
     let startedTotal = null;
@@ -97,7 +97,7 @@ export default function ImportTab() {
         const res = await fetch('/api/enrich', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ batch: 5, force }),
+          body: JSON.stringify({ batch: 5, force, mode }),
         });
         const data = await res.json();
         if (!res.ok) {
@@ -206,9 +206,17 @@ export default function ImportTab() {
           onClick={() => enrichLoop({ force: true })}
           disabled={running}
           className="px-4 py-2 border border-slate-300 text-slate-700 rounded-md hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
-          title="Re-summarize every video, even those that already have summaries."
+          title="Re-summarize every video, even those that already have summaries. Reuses cached transcripts (no Supadata cost)."
         >
           Re-enrich all
+        </button>
+        <button
+          onClick={() => enrichLoop({ mode: 'retryTranscripts' })}
+          disabled={running}
+          className="px-4 py-2 border border-amber-300 text-amber-800 bg-amber-50 rounded-md hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Try Supadata again for any video that still has no transcript. Costs 1 Supadata credit per attempt."
+        >
+          Retry missing transcripts
         </button>
       </div>
 

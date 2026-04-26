@@ -70,6 +70,10 @@ export default function LibraryTab() {
     () => videos.filter((v) => (v.key_points || []).length > 0).length,
     [videos]
   );
+  const transcriptCount = useMemo(
+    () => videos.filter((v) => v.has_transcript).length,
+    [videos]
+  );
 
   return (
     <div className="space-y-4">
@@ -100,7 +104,7 @@ export default function LibraryTab() {
       <p className="text-sm text-slate-500">
         {loading
           ? 'Loading…'
-          : `${filtered.length} of ${videos.length} videos · ${enrichedCount} fully enriched`}
+          : `${filtered.length} of ${videos.length} videos · ${enrichedCount} fully enriched · ${transcriptCount} with transcripts`}
       </p>
 
       {coverageError && (

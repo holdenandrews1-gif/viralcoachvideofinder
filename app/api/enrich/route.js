@@ -8,16 +8,23 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
 /**
- * Enrich up to `batch` videos that don't yet have a summary or key_points.
- * For each video: fetch transcript (best-effort), call Claude to generate
- * { summary, tags, key_points }, save back to Supabase.
+ * Enrich up to `batch` videos. Three selection modes:
+ *
+ *   mode='missing'        — pick videos that lack a summary or key_points
+ *                           (the default; what "Enrich missing summaries" calls)
+ *   mode='retryTranscripts' — pick videos where transcript is null. For each,
+ *                           retry Supadata; if it succeeds, regenerate summary
+ *                           + key_points off the new transcript. Skip if
+ *                           transcript still can't be fetched (don't burn
+ *                           Anthropic tokens regenerating an existing
+ *                           description-based summary).
+ *   force=true            — pick the next batch regardless of state and re-run
+ *                           Claude on cached transcripts. Doesn't burn Supadata
+ *                           credits because cached transcripts are reused.
  *
  * The UI calls this in a loop until `remaining === 0`. Splitting work into
  * small batches keeps each request well under Vercel's function timeout
- * even on channels with 100s of videos.
- *
- * Body: { batch?: number = 5, force?: boolean = false }
- *   force=true reprocesses videos that already have summaries (re-enrich-all).
+ * even on channels with hundreds of videos.
  */
 export async function POST(request) {
   let body = {};
@@ -27,6 +34,16 @@ export async function POST(request) {
 
   const batch = Math.min(Math.max(parseInt(body.batch, 10) || 5, 1), 10);
   const force = body.force === true;
+  const mode = body.mode === 'retryTranscripts' ? 'retryTranscripts' : 'missing';
+
+  // Build the "remaining" filter once — used both to pick the next batch and
+  // to report progress to the UI.
+  function applyRemainingFilter(q) {
+    if (mode === 'retryTranscripts') {
+      return q.is('transcript', null);
+    }
+    return q.or('summary.is.null,summary.eq.,key_points.eq.{}');
+  }
 
   // Pick the next batch of videos to process.
   let query = supabase
@@ -36,8 +53,7 @@ export async function POST(request) {
     .limit(batch);
 
   if (!force) {
-    // "Unenriched" = summary is null/empty OR key_points array is empty.
-    query = query.or('summary.is.null,summary.eq.,key_points.eq.{}');
+    query = applyRemainingFilter(query);
   }
 
   const { data: candidates, error: fetchErr } = await query;
@@ -46,23 +62,25 @@ export async function POST(request) {
   }
 
   if (!candidates || candidates.length === 0) {
-    // Also report total remaining so the UI can stop polling.
-    const { count } = await supabase
-      .from('videos')
-      .select('*', { count: 'exact', head: true })
-      .or('summary.is.null,summary.eq.,key_points.eq.{}');
+    let remainingCount = 0;
+    if (!force) {
+      const { count } = await applyRemainingFilter(
+        supabase.from('videos').select('*', { count: 'exact', head: true })
+      );
+      remainingCount = count || 0;
+    }
     return NextResponse.json({
       processed: 0,
-      remaining: count || 0,
+      remaining: remainingCount,
       results: [],
     });
   }
 
   const results = [];
 
-  // Process sequentially. Concurrency is tempting but each transcript fetch
-  // hits youtube and we want to avoid rate-limit issues; one at a time is
-  // safer and 5 videos completes in well under a minute.
+  // Process sequentially. Concurrency would speed things up but each Supadata
+  // call costs a credit and we want to be predictable. 5 videos completes well
+  // under 60s.
   for (const v of candidates) {
     const videoId = extractVideoId(v.url);
     if (!videoId) {
@@ -76,6 +94,20 @@ export async function POST(request) {
       const t = await fetchTranscript(videoId);
       transcriptText = t?.text || null;
       transcriptStatus = t ? `fetched (${t.source})` : 'unavailable';
+    }
+
+    // In retryTranscripts mode, skip videos where Supadata still can't get
+    // the transcript — don't waste Anthropic tokens regenerating the
+    // existing summary, and don't lie about progress.
+    if (mode === 'retryTranscripts' && !transcriptText) {
+      results.push({
+        id: v.id,
+        title: v.title,
+        transcript: transcriptStatus,
+        status: 'no_transcript',
+        keyPointsCount: (v.key_points || []).length,
+      });
+      continue;
     }
 
     // Pull description as a fallback only if no transcript.
@@ -107,11 +139,7 @@ export async function POST(request) {
       summaryError = e.message;
     }
 
-    // Always write back something — even on failure we want to record the
-    // transcript fetch outcome so the next enrich pass can move on.
-    const update = {
-      transcript: transcriptText,
-    };
+    const update = { transcript: transcriptText };
     if (!summaryError) {
       update.summary = summary;
       update.tags = tags;
@@ -133,15 +161,23 @@ export async function POST(request) {
     });
   }
 
-  // How many are still unenriched after this batch?
-  const { count: remaining } = await supabase
-    .from('videos')
-    .select('*', { count: 'exact', head: true })
-    .or('summary.is.null,summary.eq.,key_points.eq.{}');
+  // How many are still unprocessed in this mode?
+  let remaining = 0;
+  if (!force) {
+    // For retryTranscripts mode, "remaining" is more nuanced: even successful
+    // fetches drop a video out of `transcript IS NULL`, but failures leave it
+    // in. We need to subtract the failures we just had so the loop terminates.
+    const failuresThisBatch = results.filter((r) => r.status === 'no_transcript').length;
+    const { count } = await applyRemainingFilter(
+      supabase.from('videos').select('*', { count: 'exact', head: true })
+    );
+    remaining = Math.max(0, (count || 0) - failuresThisBatch);
+  }
 
   return NextResponse.json({
     processed: results.length,
-    remaining: force ? 0 : remaining || 0,
+    remaining: force ? 0 : remaining,
     results,
+    mode,
   });
 }
