@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from 'react';
 import VideoCard from './VideoCard';
 
 const DEFAULT_CHANNEL = 'https://www.youtube.com/@DanielIlesbiz';
+const CHANNEL_KEY = 'vfb.lastChannel';
+const MIN_DURATION_KEY = 'vfb.minDurationSeconds';
 
 export default function LibraryTab() {
   const [videos, setVideos] = useState([]);
@@ -12,11 +14,25 @@ export default function LibraryTab() {
   const [query, setQuery] = useState('');
 
   // Coverage check state
+  const [coverageChannel, setCoverageChannel] = useState(DEFAULT_CHANNEL);
   const [checking, setChecking] = useState(false);
   const [coverage, setCoverage] = useState(null);
   const [coverageError, setCoverageError] = useState('');
   const [pulling, setPulling] = useState(false);
   const [pullResult, setPullResult] = useState(null);
+
+  // Pick up the last-used channel from Import tab so coverage check defaults
+  // to whichever channel the user most recently imported from.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const saved = window.localStorage.getItem(CHANNEL_KEY);
+    if (saved) setCoverageChannel(saved);
+  }, []);
+  useEffect(() => {
+    if (typeof window !== 'undefined' && coverageChannel) {
+      window.localStorage.setItem(CHANNEL_KEY, coverageChannel);
+    }
+  }, [coverageChannel]);
 
   async function load() {
     setLoading(true);
@@ -34,6 +50,10 @@ export default function LibraryTab() {
   }
 
   async function runCoverage() {
+    if (!coverageChannel.trim()) {
+      setCoverageError('Enter a channel URL to check.');
+      return;
+    }
     setChecking(true);
     setCoverageError('');
     setCoverage(null);
@@ -42,7 +62,7 @@ export default function LibraryTab() {
       const res = await fetch('/api/coverage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channelUrl: DEFAULT_CHANNEL }),
+        body: JSON.stringify({ channelUrl: coverageChannel.trim() }),
       });
       const data = await res.json();
       if (!res.ok) setCoverageError(data.error || `Coverage check failed (${res.status})`);
@@ -61,10 +81,14 @@ export default function LibraryTab() {
     setCoverageError('');
     try {
       const ids = coverage.missing.map((v) => v.videoId).filter(Boolean);
+      const minDuration =
+        typeof window !== 'undefined'
+          ? parseInt(window.localStorage.getItem(MIN_DURATION_KEY) || '0', 10) || 0
+          : 0;
       const res = await fetch('/api/pull', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ videoIds: ids }),
+        body: JSON.stringify({ videoIds: ids, minDurationSeconds: minDuration }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -123,11 +147,21 @@ export default function LibraryTab() {
         >
           Refresh
         </button>
+      </div>
+
+      <div className="flex gap-2 items-center flex-wrap">
+        <input
+          type="text"
+          value={coverageChannel}
+          onChange={(e) => setCoverageChannel(e.target.value)}
+          placeholder="https://www.youtube.com/@HandleHere"
+          className="flex-1 min-w-[240px] p-2 text-sm border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+        />
         <button
           onClick={runCoverage}
           disabled={checking}
           className="px-3 py-2 text-sm border border-slate-300 rounded-md hover:bg-slate-50 disabled:opacity-50"
-          title={`Compare ${DEFAULT_CHANNEL} against the database`}
+          title="Compare this channel against the database"
         >
           {checking ? 'Checking…' : 'Coverage check'}
         </button>

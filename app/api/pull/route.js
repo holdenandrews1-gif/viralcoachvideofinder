@@ -22,6 +22,9 @@ export async function POST(request) {
   const ids = Array.isArray(body.videoIds)
     ? body.videoIds.filter((s) => typeof s === 'string' && s.length === 11).slice(0, 200)
     : [];
+  const minDuration = Number.isFinite(body.minDurationSeconds)
+    ? Math.max(0, Math.floor(body.minDurationSeconds))
+    : 0;
 
   if (ids.length === 0) {
     return NextResponse.json({ error: 'videoIds (array of YouTube video IDs) is required' }, { status: 400 });
@@ -38,13 +41,30 @@ export async function POST(request) {
     return NextResponse.json({ inserted: 0, requested: ids.length, message: 'No videos found' });
   }
 
-  const rows = videos.map((v) => ({
+  const allRows = videos.map((v) => ({
     title: v.title,
     url: v.url,
     thumbnail: v.thumbnail,
     published_at: v.publishedAt || null,
     duration_seconds: v.durationSeconds ?? null,
   }));
+
+  let rows = allRows;
+  let filteredOut = 0;
+  if (minDuration > 0) {
+    rows = allRows.filter((r) => r.duration_seconds != null && r.duration_seconds >= minDuration);
+    filteredOut = allRows.length - rows.length;
+  }
+
+  if (rows.length === 0) {
+    return NextResponse.json({
+      inserted: 0,
+      requested: ids.length,
+      found: videos.length,
+      filteredOut,
+      message: 'No videos to save after filter.',
+    });
+  }
 
   const { data, error } = await supabase
     .from('videos')
@@ -59,5 +79,6 @@ export async function POST(request) {
     inserted: data?.length || 0,
     requested: ids.length,
     found: videos.length,
+    filteredOut,
   });
 }

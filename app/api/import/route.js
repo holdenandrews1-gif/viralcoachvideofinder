@@ -1,16 +1,21 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
-import { resolveChannelId, fetchChannelVideos } from '@/lib/youtube';
-import { summarizeBatch } from '@/lib/anthropic';
+import { resolveChannelId, fetchChannelVideos, fetchDurations } from '@/lib/youtube';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300; // Vercel: allow up to 5 min for big imports.
-
-const BATCH_SIZE = 15;
+export const maxDuration = 60;
 
 /**
- * Streams progress as newline-delimited JSON so the UI can show a real
- * progress bar. Each line is a JSON object — clients should split on \n.
+ * Fast metadata-only import. Pulls up to `max` recent videos from the
+ * channel and saves them with empty summary/key_points. The UI then
+ * polls /api/enrich to fill those in. Splitting metadata from AI work
+ * keeps each request fast and predictable regardless of channel size.
+ *
+ * Optional filters:
+ *   minDurationSeconds — skip videos shorter than this (default 0).
+ *                        Use 240 to keep only 4+ minute videos, etc.
+ *
+ * Streams progress as newline-delimited JSON.
  */
 export async function POST(request) {
   let body;
@@ -21,7 +26,10 @@ export async function POST(request) {
   }
 
   const channelInput = (body.channelUrl || '').trim();
-  const max = Math.min(Math.max(parseInt(body.max, 10) || 50, 1), 200);
+  const max = Math.min(Math.max(parseInt(body.max, 10) || 50, 1), 500);
+  const minDuration = Number.isFinite(body.minDurationSeconds)
+    ? Math.max(0, Math.floor(body.minDurationSeconds))
+    : 0;
 
   if (!channelInput) {
     return NextResponse.json({ error: 'channelUrl is required' }, { status: 400 });
@@ -37,67 +45,79 @@ export async function POST(request) {
 
         send({ stage: 'fetch', message: `Fetching up to ${max} videos...`, channelId });
         const videos = await fetchChannelVideos(channelId, max);
+
+        send({ stage: 'durations', message: 'Fetching video durations...' });
+        let durationMap = new Map();
+        try {
+          durationMap = await fetchDurations(videos.map((v) => v.videoId));
+        } catch (e) {
+          send({ stage: 'warn', message: `Duration fetch failed: ${e.message}` });
+        }
+
+        // Build candidate rows, then optionally filter by minimum length.
+        const candidates = videos.map((v) => ({
+          title: v.title,
+          url: v.url,
+          thumbnail: v.thumbnail,
+          published_at: v.publishedAt || null,
+          duration_seconds: durationMap.get(v.videoId) ?? null,
+        }));
+
+        let rows = candidates;
+        let filteredOut = 0;
+        if (minDuration > 0) {
+          rows = candidates.filter((r) => {
+            // Exclude both unknown durations and known-too-short ones.
+            if (r.duration_seconds == null) return false;
+            return r.duration_seconds >= minDuration;
+          });
+          filteredOut = candidates.length - rows.length;
+          if (filteredOut > 0) {
+            send({
+              stage: 'filtered',
+              message: `Filtered out ${filteredOut} videos shorter than ${Math.round(minDuration / 60)} min.`,
+              filteredOut,
+              kept: rows.length,
+            });
+          }
+        }
+
+        if (rows.length === 0) {
+          send({
+            stage: 'done',
+            inserted: 0,
+            total: 0,
+            filteredOut,
+            message: `No videos to save after filter.`,
+          });
+          return;
+        }
+
         send({
-          stage: 'fetched',
-          message: `Fetched ${videos.length} videos. Generating AI summaries...`,
-          total: videos.length,
+          stage: 'save',
+          message: `Saving ${rows.length} videos to the database...`,
+          total: rows.length,
         });
 
-        let processed = 0;
-        let inserted = 0;
+        // Upsert. Note: this only writes the metadata columns we listed —
+        // it does NOT touch summary/tags/key_points/transcript on existing
+        // rows. /api/enrich fills those in.
+        const { data, error } = await supabase
+          .from('videos')
+          .upsert(rows, { onConflict: 'url', ignoreDuplicates: false })
+          .select('id');
 
-        for (let i = 0; i < videos.length; i += BATCH_SIZE) {
-          const batch = videos.slice(i, i + BATCH_SIZE);
-          let summaries = [];
-          try {
-            summaries = await summarizeBatch(batch);
-          } catch (e) {
-            send({
-              stage: 'warn',
-              message: `Summary batch ${i / BATCH_SIZE + 1} failed: ${e.message}. Saving without summaries.`,
-            });
-            summaries = batch.map((v) => ({ videoId: v.videoId, summary: '', tags: [] }));
-          }
-
-          const summaryById = new Map(summaries.map((s) => [s.videoId, s]));
-          const rows = batch.map((v) => {
-            const s = summaryById.get(v.videoId) || {};
-            return {
-              title: v.title,
-              url: v.url,
-              summary: s.summary || '',
-              tags: s.tags || [],
-              thumbnail: v.thumbnail,
-            };
-          });
-
-          const { data, error } = await supabase
-            .from('videos')
-            .upsert(rows, { onConflict: 'url' })
-            .select('id');
-
-          if (error) {
-            send({ stage: 'warn', message: `DB upsert error: ${error.message}` });
-          } else {
-            inserted += data?.length || 0;
-          }
-
-          processed += batch.length;
-          send({
-            stage: 'progress',
-            processed,
-            total: videos.length,
-            inserted,
-            message: `Processed ${processed}/${videos.length} videos`,
-          });
+        if (error) {
+          send({ stage: 'error', message: `DB upsert error: ${error.message}` });
+          return;
         }
 
         send({
           stage: 'done',
-          processed,
-          inserted,
-          total: videos.length,
-          message: `Imported ${inserted} videos (${processed} processed).`,
+          inserted: data?.length || 0,
+          total: rows.length,
+          filteredOut,
+          message: `Saved ${data?.length || 0} videos. Now enriching with transcripts + AI summaries...`,
         });
       } catch (e) {
         send({ stage: 'error', message: e.message || String(e) });

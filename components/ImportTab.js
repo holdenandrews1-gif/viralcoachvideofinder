@@ -1,12 +1,37 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 const DEFAULT_CHANNEL = 'https://www.youtube.com/@DanielIlesbiz';
+const CHANNEL_KEY = 'vfb.lastChannel';
+const MIN_DURATION_KEY = 'vfb.minDurationSeconds';
 
 export default function ImportTab() {
   const [channelUrl, setChannelUrl] = useState(DEFAULT_CHANNEL);
   const [max, setMax] = useState(50);
+  const [minDurationSeconds, setMinDurationSeconds] = useState(0);
+
+  // Persist channel + min length across reloads / tabs.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const savedChannel = window.localStorage.getItem(CHANNEL_KEY);
+    if (savedChannel) setChannelUrl(savedChannel);
+    const savedMin = window.localStorage.getItem(MIN_DURATION_KEY);
+    if (savedMin) {
+      const n = parseInt(savedMin, 10);
+      if (Number.isFinite(n)) setMinDurationSeconds(n);
+    }
+  }, []);
+  useEffect(() => {
+    if (typeof window !== 'undefined' && channelUrl) {
+      window.localStorage.setItem(CHANNEL_KEY, channelUrl);
+    }
+  }, [channelUrl]);
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(MIN_DURATION_KEY, String(minDurationSeconds));
+    }
+  }, [minDurationSeconds]);
   const [phase, setPhase] = useState('idle'); // idle | importing | enriching | done | error
   const [importStatus, setImportStatus] = useState({ saved: 0, total: 0 });
   const [enrichStatus, setEnrichStatus] = useState({ processed: 0, remaining: 0, startedTotal: 0 });
@@ -31,7 +56,7 @@ export default function ImportTab() {
       const res = await fetch('/api/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channelUrl, max }),
+        body: JSON.stringify({ channelUrl, max, minDurationSeconds }),
       });
 
       if (!res.body) {
@@ -195,19 +220,41 @@ export default function ImportTab() {
         </p>
       </div>
 
-      <div>
-        <label className="block text-sm font-medium text-slate-700 mb-1">Max videos</label>
-        <select
-          value={max}
-          onChange={(e) => setMax(Number(e.target.value))}
-          disabled={running}
-          className="p-2 border border-slate-300 rounded-md bg-white disabled:opacity-50"
-        >
-          <option value={25}>25</option>
-          <option value={50}>50</option>
-          <option value={100}>100</option>
-          <option value={200}>200</option>
-        </select>
+      <div className="flex flex-wrap gap-4">
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-1">Max videos</label>
+          <select
+            value={max}
+            onChange={(e) => setMax(Number(e.target.value))}
+            disabled={running}
+            className="p-2 border border-slate-300 rounded-md bg-white disabled:opacity-50"
+          >
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+            <option value={200}>200</option>
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            Minimum length
+          </label>
+          <select
+            value={minDurationSeconds}
+            onChange={(e) => setMinDurationSeconds(Number(e.target.value))}
+            disabled={running}
+            className="p-2 border border-slate-300 rounded-md bg-white disabled:opacity-50"
+            title="Skip videos shorter than this. Useful for excluding Shorts."
+          >
+            <option value={0}>No minimum</option>
+            <option value={60}>1 minute</option>
+            <option value={180}>3 minutes</option>
+            <option value={240}>4 minutes</option>
+            <option value={300}>5 minutes</option>
+            <option value={600}>10 minutes</option>
+          </select>
+        </div>
       </div>
 
       <div className="flex gap-2 flex-wrap">
