@@ -15,6 +15,8 @@ export default function LibraryTab() {
   const [checking, setChecking] = useState(false);
   const [coverage, setCoverage] = useState(null);
   const [coverageError, setCoverageError] = useState('');
+  const [pulling, setPulling] = useState(false);
+  const [pullResult, setPullResult] = useState(null);
 
   async function load() {
     setLoading(true);
@@ -35,6 +37,7 @@ export default function LibraryTab() {
     setChecking(true);
     setCoverageError('');
     setCoverage(null);
+    setPullResult(null);
     try {
       const res = await fetch('/api/coverage', {
         method: 'POST',
@@ -48,6 +51,35 @@ export default function LibraryTab() {
       setCoverageError(e.message);
     } finally {
       setChecking(false);
+    }
+  }
+
+  async function pullMissing() {
+    if (!coverage?.missing?.length) return;
+    setPulling(true);
+    setPullResult(null);
+    setCoverageError('');
+    try {
+      const ids = coverage.missing.map((v) => v.videoId).filter(Boolean);
+      const res = await fetch('/api/pull', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ videoIds: ids }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setCoverageError(data.error || `Pull failed (${res.status})`);
+        return;
+      }
+      setPullResult(data);
+      // Refresh both the library list and the coverage diff so the user sees
+      // the gap close immediately.
+      await load();
+      await runCoverage();
+    } catch (e) {
+      setCoverageError(e.message);
+    } finally {
+      setPulling(false);
     }
   }
 
@@ -128,32 +160,50 @@ export default function LibraryTab() {
             )}
           </div>
           {coverage.missing.length > 0 && (
-            <details className="text-slate-700">
-              <summary className="cursor-pointer hover:text-slate-900">
-                Show {coverage.missing.length} missing videos
-              </summary>
-              <ul className="mt-2 space-y-1 max-h-64 overflow-auto pl-2">
-                {coverage.missing.map((v) => (
-                  <li key={v.videoId} className="text-xs">
-                    <a
-                      href={v.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-indigo-600 hover:underline"
-                    >
-                      {v.title}
-                    </a>
-                    {v.publishedAt && (
-                      <span className="text-slate-500"> · {v.publishedAt.slice(0, 10)}</span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-2 text-xs text-slate-500">
-                To pull these in, go to the Import tab and run an import with Max set to{' '}
-                {Math.max(coverage.channelTotal, 100)}+.
-              </p>
-            </details>
+            <>
+              <button
+                onClick={pullMissing}
+                disabled={pulling}
+                className="px-3 py-1.5 bg-indigo-600 text-white text-xs rounded hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {pulling
+                  ? `Pulling ${coverage.missing.length} videos…`
+                  : `Pull these ${coverage.missing.length} into the library`}
+              </button>
+              <details className="text-slate-700">
+                <summary className="cursor-pointer hover:text-slate-900">
+                  Show {coverage.missing.length} missing videos
+                </summary>
+                <ul className="mt-2 space-y-1 max-h-64 overflow-auto pl-2">
+                  {coverage.missing.map((v) => (
+                    <li key={v.videoId} className="text-xs">
+                      <a
+                        href={v.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-indigo-600 hover:underline"
+                      >
+                        {v.title}
+                      </a>
+                      {v.publishedAt && (
+                        <span className="text-slate-500"> · {v.publishedAt.slice(0, 10)}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-xs text-slate-500">
+                  After pulling, head to the Import tab and click "Enrich missing summaries" to
+                  generate transcripts + AI summaries for the new rows.
+                </p>
+              </details>
+            </>
+          )}
+          {pullResult && (
+            <div className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded p-2">
+              Saved {pullResult.inserted} of {pullResult.requested} requested videos. Now go to the
+              Import tab and click <span className="font-medium">"Enrich missing summaries"</span>{' '}
+              to summarize them.
+            </div>
           )}
         </div>
       )}
