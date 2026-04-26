@@ -35,6 +35,7 @@ export async function POST(request) {
   const batch = Math.min(Math.max(parseInt(body.batch, 10) || 5, 1), 10);
   const force = body.force === true;
   const mode = body.mode === 'retryTranscripts' ? 'retryTranscripts' : 'missing';
+  const offset = Math.max(0, parseInt(body.offset, 10) || 0);
 
   // Build the "remaining" filter once — used both to pick the next batch and
   // to report progress to the UI.
@@ -51,15 +52,21 @@ export async function POST(request) {
     return q.or('summary.is.null,summary.eq.');
   }
 
-  // Pick the next batch of videos to process.
+  // Pick the next batch of videos to process. In force mode we paginate by
+  // offset (caller increments) so the loop covers the whole library. In
+  // missing/retry modes the filter naturally excludes already-processed
+  // rows, so no offset needed.
   let query = supabase
     .from('videos')
     .select('id, title, url, thumbnail, summary, key_points, transcript')
-    .order('published_at', { ascending: false, nullsFirst: false })
-    .limit(batch);
+    .order('published_at', { ascending: false, nullsFirst: false });
 
-  if (!force) {
-    query = applyRemainingFilter(query);
+  if (force) {
+    // Stable secondary sort by id so pagination is deterministic even when
+    // many rows have null published_at.
+    query = query.order('id', { ascending: true }).range(offset, offset + batch - 1);
+  } else {
+    query = applyRemainingFilter(query).limit(batch);
   }
 
   const { data: candidates, error: fetchErr } = await query;
@@ -78,6 +85,7 @@ export async function POST(request) {
     return NextResponse.json({
       processed: 0,
       remaining: remainingCount,
+      nextOffset: force ? offset : undefined,
       results: [],
     });
   }
@@ -169,7 +177,15 @@ export async function POST(request) {
 
   // How many are still unprocessed in this mode?
   let remaining = 0;
-  if (!force) {
+  let nextOffset;
+  if (force) {
+    // Total rows minus what we've now processed (offset + this batch).
+    const { count: totalCount } = await supabase
+      .from('videos')
+      .select('*', { count: 'exact', head: true });
+    nextOffset = offset + results.length;
+    remaining = Math.max(0, (totalCount || 0) - nextOffset);
+  } else {
     // For retryTranscripts mode, "remaining" is more nuanced: even successful
     // fetches drop a video out of `transcript IS NULL`, but failures leave it
     // in. We need to subtract the failures we just had so the loop terminates.
@@ -182,7 +198,8 @@ export async function POST(request) {
 
   return NextResponse.json({
     processed: results.length,
-    remaining: force ? 0 : remaining,
+    remaining,
+    nextOffset,
     results,
     mode,
   });

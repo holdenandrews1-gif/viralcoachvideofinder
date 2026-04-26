@@ -121,13 +121,14 @@ export default function ImportTab() {
     const seenIds = new Set();
     let prevRemaining = null;
     let stalledIterations = 0;
+    let offset = 0; // only meaningful in force mode (server paginates)
 
     while (true) {
       try {
         const res = await fetch('/api/enrich', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ batch: 5, force, mode }),
+          body: JSON.stringify({ batch: 5, force, mode, offset }),
         });
         const data = await res.json();
         if (!res.ok) {
@@ -143,6 +144,9 @@ export default function ImportTab() {
         processed += data.processed || 0;
         const remaining = data.remaining || 0;
         const results = data.results || [];
+        // Server returns nextOffset in force mode so we can ask for the
+        // next page on the next iteration.
+        if (typeof data.nextOffset === 'number') offset = data.nextOffset;
 
         // Safety guard: if we keep seeing the same ids the server is stuck
         // in a loop. Bail out instead of running forever.
