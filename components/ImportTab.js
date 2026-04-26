@@ -91,6 +91,9 @@ export default function ImportTab() {
     setPhase('enriching');
     let processed = 0;
     let startedTotal = null;
+    const seenIds = new Set();
+    let prevRemaining = null;
+    let stalledIterations = 0;
 
     while (true) {
       try {
@@ -112,8 +115,14 @@ export default function ImportTab() {
 
         processed += data.processed || 0;
         const remaining = data.remaining || 0;
+        const results = data.results || [];
 
-        for (const r of data.results || []) {
+        // Safety guard: if we keep seeing the same ids the server is stuck
+        // in a loop. Bail out instead of running forever.
+        const dupes = results.filter((r) => seenIds.has(r.id)).length;
+        results.forEach((r) => seenIds.add(r.id));
+
+        for (const r of results) {
           appendLog(
             `${r.status === 'ok' ? '✓' : '⚠︎'} ${r.title || r.id}` +
               (r.transcript ? ` [transcript: ${r.transcript}]` : '') +
@@ -125,14 +134,30 @@ export default function ImportTab() {
         setEnrichStatus({
           processed,
           remaining,
-          startedTotal: startedTotal || processed + remaining,
+          startedTotal: Math.max(startedTotal || 0, processed + remaining),
         });
 
         if ((data.processed || 0) === 0 || remaining === 0) {
-          appendLog(`Enrich complete. ${processed} videos enriched.`);
+          appendLog(`Enrich complete. ${processed} videos processed.`);
           setPhase('done');
           return;
         }
+
+        // Stall detection: same videos coming back, or remaining isn't
+        // shrinking. After 2 stalled iterations, give up.
+        if (dupes > 0 || (prevRemaining !== null && remaining >= prevRemaining)) {
+          stalledIterations += 1;
+          if (stalledIterations >= 2) {
+            appendLog(
+              `Stopping: server keeps returning the same videos. ${processed} processed, ${remaining} stuck.`
+            );
+            setPhase('done');
+            return;
+          }
+        } else {
+          stalledIterations = 0;
+        }
+        prevRemaining = remaining;
       } catch (e) {
         setError(e.message);
         setPhase('error');

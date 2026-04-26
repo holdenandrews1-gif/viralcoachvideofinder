@@ -38,11 +38,17 @@ export async function POST(request) {
 
   // Build the "remaining" filter once — used both to pick the next batch and
   // to report progress to the UI.
+  //
+  // IMPORTANT: don't treat "empty key_points" as needs-enrichment. Some
+  // videos legitimately produce zero key_points (description-only fallbacks
+  // with thin source text), and including that in the filter causes the row
+  // to get re-picked forever. Use the explicit "Re-enrich all" button to
+  // retry those.
   function applyRemainingFilter(q) {
     if (mode === 'retryTranscripts') {
       return q.is('transcript', null);
     }
-    return q.or('summary.is.null,summary.eq.,key_points.eq.{}');
+    return q.or('summary.is.null,summary.eq.');
   }
 
   // Pick the next batch of videos to process.
