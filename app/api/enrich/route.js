@@ -75,7 +75,7 @@ export async function POST(request) {
     if (!transcriptText) {
       const t = await fetchTranscript(videoId);
       transcriptText = t?.text || null;
-      transcriptStatus = t ? 'fetched' : 'unavailable';
+      transcriptStatus = t ? `fetched (${t.source})` : 'unavailable';
     }
 
     // Pull description as a fallback only if no transcript.

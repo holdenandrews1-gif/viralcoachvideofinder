@@ -51,6 +51,7 @@ in Vercel project settings:
 | `ANTHROPIC_API_KEY` | https://console.anthropic.com → API keys |
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project → Settings → API → Project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase project → Settings → API → anon/public key |
+| `SUPADATA_API_KEY` | https://supadata.ai → dashboard → API keys. Used to reliably fetch YouTube transcripts from datacenter IPs (the free `youtube-transcript` scraper is blocked by YouTube on Vercel). Optional but strongly recommended in production. |
 
 ## Local dev
 
