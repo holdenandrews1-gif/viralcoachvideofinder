@@ -9,6 +9,7 @@ const MIN_DURATION_KEY = 'vfb.minDurationSeconds';
 
 export default function LibraryTab() {
   const [videos, setVideos] = useState([]);
+  const [dbCount, setDbCount] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
@@ -51,8 +52,12 @@ export default function LibraryTab() {
     try {
       const res = await fetch('/api/videos');
       const data = await res.json();
-      if (!res.ok) setError(data.error || 'Failed to load library.');
-      else setVideos(data.videos || []);
+      if (!res.ok) {
+        setError(data.error || 'Failed to load library.');
+      } else {
+        setVideos(data.videos || []);
+        setDbCount(typeof data.dbCount === 'number' ? data.dbCount : null);
+      }
     } catch (e) {
       setError(e.message);
     } finally {
@@ -178,6 +183,11 @@ export default function LibraryTab() {
         {loading
           ? 'Loading…'
           : `${filtered.length} of ${videos.length} videos · ${enrichedCount} fully enriched · ${transcriptCount} with transcripts`}
+        {dbCount != null && dbCount !== videos.length && (
+          <span className="ml-1 text-amber-700">
+            (DB has {dbCount} rows total — only {videos.length} loaded)
+          </span>
+        )}
       </p>
 
       {coverageError && (
