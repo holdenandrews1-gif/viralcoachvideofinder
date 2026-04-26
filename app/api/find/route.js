@@ -12,11 +12,8 @@ export const maxDuration = 60;
  *   notes: string (required)
  *   minDurationSeconds?: number  — videos shorter than this are excluded
  *   maxDurationSeconds?: number  — videos longer than this are excluded
- *
- * The duration filters let the UI fire two parallel calls (long-form vs
- * short-form sections) by passing different ranges. Videos with no known
- * duration are treated as long-form (most full-length videos that simply
- * lack metadata).
+ *   excludeIds?: string[]        — video IDs to exclude (used by Refine)
+ *   refinement?: string          — free-form rep feedback for course-correction
  */
 export async function POST(request) {
   let body;
@@ -37,6 +34,10 @@ export async function POST(request) {
   const maxDuration = Number.isFinite(body.maxDurationSeconds)
     ? Math.max(0, Math.floor(body.maxDurationSeconds))
     : null;
+  const excludeIds = new Set(
+    Array.isArray(body.excludeIds) ? body.excludeIds.filter((s) => typeof s === 'string') : []
+  );
+  const refinement = typeof body.refinement === 'string' ? body.refinement.trim() : '';
 
   const { data: library, error } = await supabase
     .from('videos')
@@ -52,11 +53,11 @@ export async function POST(request) {
     );
   }
 
-  // Apply duration filters. Both buckets exclude videos with unknown duration
-  // — assigning them to either bucket has been wrong in practice (e.g.
-  // 60-second Shorts ending up in long-form). Run /api/backfill-durations
-  // to populate the column for legacy imports.
+  // Apply duration + exclude filters. Both buckets exclude videos with
+  // unknown duration. Run /api/backfill-durations to populate the column
+  // for legacy imports.
   const filtered = library.filter((v) => {
+    if (excludeIds.has(v.id)) return false;
     const d = v.duration_seconds;
     if (minDuration !== null || maxDuration !== null) {
       if (d == null) return false;
@@ -76,11 +77,12 @@ export async function POST(request) {
   }
 
   try {
-    const matches = await findTopMatches(notes, filtered);
+    const matches = await findTopMatches(notes, filtered, refinement);
     return NextResponse.json({
       matches,
       libraryFiltered: filtered.length,
       libraryTotal: library.length,
+      excludedCount: excludeIds.size,
     });
   } catch (e) {
     return NextResponse.json({ error: e.message || 'Failed to generate matches' }, { status: 500 });
