@@ -5,6 +5,19 @@ import { findTopMatches } from '@/lib/anthropic';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
+/**
+ * Find best video matches for a prospect.
+ *
+ * Body:
+ *   notes: string (required)
+ *   minDurationSeconds?: number  — videos shorter than this are excluded
+ *   maxDurationSeconds?: number  — videos longer than this are excluded
+ *
+ * The duration filters let the UI fire two parallel calls (long-form vs
+ * short-form sections) by passing different ranges. Videos with no known
+ * duration are treated as long-form (most full-length videos that simply
+ * lack metadata).
+ */
 export async function POST(request) {
   let body;
   try {
@@ -18,9 +31,16 @@ export async function POST(request) {
     return NextResponse.json({ error: 'Prospect notes are required.' }, { status: 400 });
   }
 
+  const minDuration = Number.isFinite(body.minDurationSeconds)
+    ? Math.max(0, Math.floor(body.minDurationSeconds))
+    : null;
+  const maxDuration = Number.isFinite(body.maxDurationSeconds)
+    ? Math.max(0, Math.floor(body.maxDurationSeconds))
+    : null;
+
   const { data: library, error } = await supabase
     .from('videos')
-    .select('id, title, url, summary, tags, key_points, thumbnail');
+    .select('id, title, url, summary, tags, key_points, thumbnail, duration_seconds');
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -32,9 +52,38 @@ export async function POST(request) {
     );
   }
 
+  // Apply duration filters. Treat null duration as long-form (likely a real
+  // video missing metadata, not a Short).
+  const filtered = library.filter((v) => {
+    const d = v.duration_seconds;
+    if (minDuration !== null) {
+      // Long-form filter: include null durations.
+      if (d != null && d < minDuration) return false;
+    }
+    if (maxDuration !== null) {
+      // Short-form filter: exclude null durations (we can't confirm they're short).
+      if (d == null) return false;
+      if (d > maxDuration) return false;
+    }
+    return true;
+  });
+
+  if (filtered.length === 0) {
+    return NextResponse.json({
+      matches: [],
+      libraryFiltered: 0,
+      libraryTotal: library.length,
+      message: 'No videos in the library match the duration filter.',
+    });
+  }
+
   try {
-    const matches = await findTopMatches(notes, library);
-    return NextResponse.json({ matches });
+    const matches = await findTopMatches(notes, filtered);
+    return NextResponse.json({
+      matches,
+      libraryFiltered: filtered.length,
+      libraryTotal: library.length,
+    });
   } catch (e) {
     return NextResponse.json({ error: e.message || 'Failed to generate matches' }, { status: 500 });
   }
