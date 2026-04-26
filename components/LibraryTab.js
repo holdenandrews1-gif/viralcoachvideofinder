@@ -15,6 +15,7 @@ export default function LibraryTab() {
 
   // Coverage check state
   const [coverageChannel, setCoverageChannel] = useState(DEFAULT_CHANNEL);
+  const [pullMinDuration, setPullMinDuration] = useState(0);
   const [checking, setChecking] = useState(false);
   const [coverage, setCoverage] = useState(null);
   const [coverageError, setCoverageError] = useState('');
@@ -27,12 +28,22 @@ export default function LibraryTab() {
     if (typeof window === 'undefined') return;
     const saved = window.localStorage.getItem(CHANNEL_KEY);
     if (saved) setCoverageChannel(saved);
+    const savedMin = window.localStorage.getItem(MIN_DURATION_KEY);
+    if (savedMin) {
+      const n = parseInt(savedMin, 10);
+      if (Number.isFinite(n)) setPullMinDuration(n);
+    }
   }, []);
   useEffect(() => {
     if (typeof window !== 'undefined' && coverageChannel) {
       window.localStorage.setItem(CHANNEL_KEY, coverageChannel);
     }
   }, [coverageChannel]);
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(MIN_DURATION_KEY, String(pullMinDuration));
+    }
+  }, [pullMinDuration]);
 
   async function load() {
     setLoading(true);
@@ -81,14 +92,10 @@ export default function LibraryTab() {
     setCoverageError('');
     try {
       const ids = coverage.missing.map((v) => v.videoId).filter(Boolean);
-      const minDuration =
-        typeof window !== 'undefined'
-          ? parseInt(window.localStorage.getItem(MIN_DURATION_KEY) || '0', 10) || 0
-          : 0;
       const res = await fetch('/api/pull', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ videoIds: ids, minDurationSeconds: minDuration }),
+        body: JSON.stringify({ videoIds: ids, minDurationSeconds: pullMinDuration }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -195,15 +202,42 @@ export default function LibraryTab() {
           </div>
           {coverage.missing.length > 0 && (
             <>
-              <button
-                onClick={pullMissing}
-                disabled={pulling}
-                className="px-3 py-1.5 bg-indigo-600 text-white text-xs rounded hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {pulling
-                  ? `Pulling ${coverage.missing.length} videos…`
-                  : `Pull these ${coverage.missing.length} into the library`}
-              </button>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={pullMissing}
+                  disabled={pulling}
+                  className="px-3 py-1.5 bg-indigo-600 text-white text-xs rounded hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {pulling
+                    ? `Pulling ${coverage.missing.length} videos…`
+                    : pullMinDuration > 0
+                    ? `Pull these ${coverage.missing.length} (≥ ${Math.round(pullMinDuration / 60)} min only)`
+                    : `Pull these ${coverage.missing.length} into the library`}
+                </button>
+                <label className="text-xs text-slate-600">
+                  Min length:{' '}
+                  <select
+                    value={pullMinDuration}
+                    onChange={(e) => setPullMinDuration(Number(e.target.value))}
+                    disabled={pulling}
+                    className="ml-1 p-1 border border-slate-300 rounded bg-white text-xs disabled:opacity-50"
+                  >
+                    <option value={0}>No minimum</option>
+                    <option value={60}>1 minute</option>
+                    <option value={180}>3 minutes</option>
+                    <option value={240}>4 minutes</option>
+                    <option value={300}>5 minutes</option>
+                    <option value={600}>10 minutes</option>
+                  </select>
+                </label>
+              </div>
+              {pullMinDuration > 0 && (
+                <p className="text-xs text-slate-500">
+                  Only videos at least {Math.round(pullMinDuration / 60)} minute
+                  {pullMinDuration >= 120 ? 's' : ''} long will be saved. The rest are fetched
+                  for their length but discarded.
+                </p>
+              )}
               <details className="text-slate-700">
                 <summary className="cursor-pointer hover:text-slate-900">
                   Show {coverage.missing.length} missing videos
