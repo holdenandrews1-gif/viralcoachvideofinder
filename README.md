@@ -62,6 +62,33 @@ npm run dev
 # open http://localhost:3000
 ```
 
+## Backfilling transcripts locally (free)
+
+YouTube blocks the public-caption endpoint from datacenter IPs (Vercel, AWS),
+which is why production needs a paid transcript API like Supadata. But from
+your laptop's residential IP, the free `youtube-transcript` package works.
+
+To fill in transcripts without burning Supadata credits:
+
+```bash
+git clone https://github.com/holdenandrews1-gif/viralcoachvideofinder.git
+cd viralcoachvideofinder
+npm install
+
+# Create a .env file in this folder with your Supabase values:
+#   NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+#   NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
+# (Same values you have in Vercel — copy them from there.)
+
+npm run backfill-transcripts
+```
+
+The script walks every video where `transcript IS NULL`, fetches the caption
+track from your IP, and writes it back to Supabase. Resumable — if you Ctrl-C
+and re-run, it picks up where it left off. After it finishes, hit "Re-enrich
+all" in the deployed app's Import tab to regenerate summaries + key_points
+from the now-cached transcripts (no Supadata cost).
+
 ## Deploy to Vercel
 
 1. Push this repo to GitHub.
