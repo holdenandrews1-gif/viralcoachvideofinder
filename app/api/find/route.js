@@ -52,19 +52,17 @@ export async function POST(request) {
     );
   }
 
-  // Apply duration filters. Treat null duration as long-form (likely a real
-  // video missing metadata, not a Short).
+  // Apply duration filters. Both buckets exclude videos with unknown duration
+  // — assigning them to either bucket has been wrong in practice (e.g.
+  // 60-second Shorts ending up in long-form). Run /api/backfill-durations
+  // to populate the column for legacy imports.
   const filtered = library.filter((v) => {
     const d = v.duration_seconds;
-    if (minDuration !== null) {
-      // Long-form filter: include null durations.
-      if (d != null && d < minDuration) return false;
-    }
-    if (maxDuration !== null) {
-      // Short-form filter: exclude null durations (we can't confirm they're short).
+    if (minDuration !== null || maxDuration !== null) {
       if (d == null) return false;
-      if (d > maxDuration) return false;
     }
+    if (minDuration !== null && d < minDuration) return false;
+    if (maxDuration !== null && d > maxDuration) return false;
     return true;
   });
 

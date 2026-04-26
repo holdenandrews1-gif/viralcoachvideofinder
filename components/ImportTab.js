@@ -12,6 +12,8 @@ export default function ImportTab() {
   const [enrichStatus, setEnrichStatus] = useState({ processed: 0, remaining: 0, startedTotal: 0 });
   const [log, setLog] = useState([]);
   const [error, setError] = useState('');
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillResult, setBackfillResult] = useState(null);
 
   function appendLog(line) {
     setLog((l) => [...l, line].slice(-80));
@@ -243,7 +245,46 @@ export default function ImportTab() {
         >
           Retry missing transcripts
         </button>
+        <button
+          onClick={async () => {
+            setBackfilling(true);
+            setBackfillResult(null);
+            try {
+              const res = await fetch('/api/backfill-durations', { method: 'POST' });
+              const data = await res.json();
+              setBackfillResult(data);
+            } catch (e) {
+              setBackfillResult({ error: e.message });
+            } finally {
+              setBackfilling(false);
+            }
+          }}
+          disabled={running || backfilling}
+          className="px-4 py-2 border border-slate-300 text-slate-700 rounded-md hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Fetch video lengths from YouTube for any videos with unknown duration. Required so the long-form/short-form split works on legacy imports."
+        >
+          {backfilling ? 'Backfilling…' : 'Backfill durations'}
+        </button>
       </div>
+
+      {backfillResult && (
+        <div className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded p-2">
+          {backfillResult.error ? (
+            <span className="text-red-700">Backfill failed: {backfillResult.error}</span>
+          ) : backfillResult.requested === 0 ? (
+            <>All videos already have a known duration.</>
+          ) : (
+            <>
+              Updated {backfillResult.updated} of {backfillResult.requested} videos with missing
+              durations.
+              {backfillResult.missing > 0 && (
+                <> {backfillResult.missing} couldn't be resolved (deleted or unavailable on
+                YouTube).</>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {(phase === 'importing' || importStatus.total > 0) && (
         <div className="space-y-1">
