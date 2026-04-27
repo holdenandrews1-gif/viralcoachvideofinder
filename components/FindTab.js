@@ -3,19 +3,17 @@
 import { useState } from 'react';
 import VideoCard from './VideoCard';
 
-const SHORT_FORM_MAX_SECONDS = 300; // <= 5 min = short-form
-const LONG_FORM_MIN_SECONDS = 300; // > 5 min = long-form
+const MIN_DURATION_SECONDS = 300; // 5 min — recommendations are long-form only
 
 export default function FindTab() {
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
-  const [longResult, setLongResult] = useState(null);
-  const [shortResult, setShortResult] = useState(null);
+  const [result, setResult] = useState(null); // { matches, libraryFiltered, libraryTotal, message }
   const [error, setError] = useState('');
 
   // Refinement state
   const [refinement, setRefinement] = useState('');
-  const [excludedIds, setExcludedIds] = useState([]); // array of all video ids shown so far
+  const [excludedIds, setExcludedIds] = useState([]);
   const [refining, setRefining] = useState(false);
 
   async function findMatches({ refinementText = '', exclude = [] } = {}) {
@@ -29,28 +27,27 @@ export default function FindTab() {
     else setLoading(true);
 
     try {
-      const [longRes, shortRes] = await Promise.all([
-        callFind({
+      const res = await fetch('/api/find', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           notes,
-          minDurationSeconds: LONG_FORM_MIN_SECONDS,
+          minDurationSeconds: MIN_DURATION_SECONDS,
           excludeIds: exclude,
           refinement: refinementText,
         }),
-        callFind({
-          notes,
-          maxDurationSeconds: SHORT_FORM_MAX_SECONDS,
-          excludeIds: exclude,
-          refinement: refinementText,
-        }),
-      ]);
-      setLongResult(longRes);
-      setShortResult(shortRes);
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error || `Find failed (${res.status})`);
+        return;
+      }
+
+      setResult(data);
 
       // Track every id we've shown so refinements exclude them.
-      const newIds = [
-        ...(longRes?.matches || []).map((m) => m.id),
-        ...(shortRes?.matches || []).map((m) => m.id),
-      ];
+      const newIds = (data.matches || []).map((m) => m.id);
       setExcludedIds((prev) => Array.from(new Set([...prev, ...newIds])));
     } catch (e) {
       setError(e.message);
@@ -60,11 +57,10 @@ export default function FindTab() {
     }
   }
 
-  // Fresh search: clear refinement state so we don't accidentally exclude
-  // useful videos from a previous query.
   async function freshSearch() {
     setExcludedIds([]);
     setRefinement('');
+    setResult(null);
     await findMatches();
   }
 
@@ -76,7 +72,7 @@ export default function FindTab() {
     await findMatches({ refinementText: refinement, exclude: excludedIds });
   }
 
-  const hasResults = Boolean(longResult || shortResult);
+  const hasResult = Boolean(result);
   const totalShown = excludedIds.length;
 
   return (
@@ -106,20 +102,9 @@ export default function FindTab() {
         </div>
       )}
 
-      {hasResults && (
+      {hasResult && (
         <div className="space-y-6 pt-2">
-          <ResultSection
-            title="Long-form recommendations"
-            subtitle="5 minutes or longer"
-            result={longResult}
-            prospectNotes={notes}
-          />
-          <ResultSection
-            title="Short-form recommendations"
-            subtitle="Under 5 minutes"
-            result={shortResult}
-            prospectNotes={notes}
-          />
+          <ResultSection result={result} prospectNotes={notes} />
 
           <RefinePanel
             refinement={refinement}
@@ -134,13 +119,13 @@ export default function FindTab() {
   );
 }
 
-function ResultSection({ title, subtitle, result, prospectNotes }) {
+function ResultSection({ result, prospectNotes }) {
   return (
     <section className="space-y-3">
       <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 pb-1">
-        <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
+        <h2 className="text-lg font-semibold text-slate-900">Recommended videos</h2>
         <span className="text-xs text-slate-500">
-          {subtitle}
+          5+ minutes
           {result?.libraryFiltered != null && result?.libraryTotal != null && (
             <>
               {' '}
@@ -151,15 +136,9 @@ function ResultSection({ title, subtitle, result, prospectNotes }) {
         </span>
       </div>
 
-      {result?.error && (
-        <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded">
-          {result.error}
-        </div>
-      )}
-
-      {!result?.error && (result?.matches?.length || 0) === 0 && (
+      {(result?.matches?.length || 0) === 0 && (
         <p className="text-sm text-slate-500 italic">
-          {result?.message || 'No matches in this category.'}
+          {result?.message || 'No matches.'}
         </p>
       )}
 
@@ -198,19 +177,4 @@ function RefinePanel({ refinement, setRefinement, onRefine, refining, totalShown
       </button>
     </section>
   );
-}
-
-async function callFind(body) {
-  try {
-    const res = await fetch('/api/find', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (!res.ok) return { error: data.error || `Find failed (${res.status})` };
-    return data;
-  } catch (e) {
-    return { error: e.message };
-  }
 }

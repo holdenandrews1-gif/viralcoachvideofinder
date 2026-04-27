@@ -11,7 +11,8 @@ export const maxDuration = 60;
  * Body:
  *   notes: string (required)
  *   minDurationSeconds?: number  — videos shorter than this are excluded
- *   maxDurationSeconds?: number  — videos longer than this are excluded
+ *                                  (default 300 = 5 min, since the focus is
+ *                                  long-form recommendations)
  *   excludeIds?: string[]        — video IDs to exclude (used by Refine)
  *   refinement?: string          — free-form rep feedback for course-correction
  */
@@ -30,10 +31,7 @@ export async function POST(request) {
 
   const minDuration = Number.isFinite(body.minDurationSeconds)
     ? Math.max(0, Math.floor(body.minDurationSeconds))
-    : null;
-  const maxDuration = Number.isFinite(body.maxDurationSeconds)
-    ? Math.max(0, Math.floor(body.maxDurationSeconds))
-    : null;
+    : 300;
   const excludeIds = new Set(
     Array.isArray(body.excludeIds) ? body.excludeIds.filter((s) => typeof s === 'string') : []
   );
@@ -41,7 +39,8 @@ export async function POST(request) {
 
   const { data: library, error } = await supabase
     .from('videos')
-    .select('id, title, url, summary, tags, key_points, thumbnail, duration_seconds');
+    .select('id, title, url, summary, tags, key_points, thumbnail, duration_seconds')
+    .range(0, 4999);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -53,17 +52,14 @@ export async function POST(request) {
     );
   }
 
-  // Apply duration + exclude filters. Both buckets exclude videos with
-  // unknown duration. Run /api/backfill-durations to populate the column
-  // for legacy imports.
+  // Apply min-duration filter and exclude list. Videos with unknown
+  // duration are excluded — once the rep runs Backfill durations all
+  // legacy rows will have a real value.
   const filtered = library.filter((v) => {
     if (excludeIds.has(v.id)) return false;
-    const d = v.duration_seconds;
-    if (minDuration !== null || maxDuration !== null) {
-      if (d == null) return false;
+    if (minDuration > 0 && (v.duration_seconds == null || v.duration_seconds < minDuration)) {
+      return false;
     }
-    if (minDuration !== null && d < minDuration) return false;
-    if (maxDuration !== null && d > maxDuration) return false;
     return true;
   });
 
@@ -72,7 +68,11 @@ export async function POST(request) {
       matches: [],
       libraryFiltered: 0,
       libraryTotal: library.length,
-      message: 'No videos in the library match the duration filter.',
+      excludedCount: excludeIds.size,
+      message:
+        excludeIds.size > 0
+          ? 'Every qualifying video has already been shown — start a fresh search to clear refinement.'
+          : 'No videos in the library match the duration filter.',
     });
   }
 
@@ -85,6 +85,9 @@ export async function POST(request) {
       excludedCount: excludeIds.size,
     });
   } catch (e) {
-    return NextResponse.json({ error: e.message || 'Failed to generate matches' }, { status: 500 });
+    return NextResponse.json(
+      { error: e.message || 'Failed to generate matches' },
+      { status: 500 }
+    );
   }
 }
